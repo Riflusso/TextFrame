@@ -1,49 +1,39 @@
 import ctypes
+import importlib
 
 import sdl3
-from OpenGL import GL
 
-from .styles import BG_COLOR, FRAME_COLOR, TEXT_COLOR_RGBA
-from .text import create_text_texture, delete_text_texture, draw_text_texture
+from textframe.core.interfaces import IRenderer, ITexture
+from textframe.styles import BG_COLOR, FRAME_COLOR, TEXT_COLOR_RGBA
+from textframe.text import create_text_texture
 
 
-def init_window(title: bytes, width: int, height: int):
+def load_backend(name: str) -> IRenderer:
+    """Подгружает 'textframe.opengl' или 'textframe.vulkan'."""
+    module = importlib.import_module(f"textframe.{name}")
+    return module.create_renderer()
+
+
+def init_window(renderer: IRenderer, title: bytes, width: int, height: int):
     if not sdl3.SDL_Init(sdl3.SDL_INIT_VIDEO):
         raise RuntimeError(f"SDL_Init failed: {sdl3.SDL_GetError().decode()}")
 
-    sdl3.SDL_GL_SetAttribute(sdl3.SDL_GL_CONTEXT_MAJOR_VERSION, 2)
-    sdl3.SDL_GL_SetAttribute(sdl3.SDL_GL_CONTEXT_MINOR_VERSION, 1)
-    sdl3.SDL_GL_SetAttribute(sdl3.SDL_GL_DOUBLEBUFFER, 1)
+    renderer.prepare_window_hints()
 
-    window = sdl3.SDL_CreateWindow(
-        title, width, height, sdl3.SDL_WINDOW_OPENGL | sdl3.SDL_WINDOW_RESIZABLE
-    )
+    flags = renderer.get_window_flags() | sdl3.SDL_WINDOW_RESIZABLE
+    window = sdl3.SDL_CreateWindow(title, width, height, flags)
     if not window:
         sdl3.SDL_Quit()
         raise RuntimeError(f"SDL_CreateWindow failed: {sdl3.SDL_GetError().decode()}")
 
-    gl_context = sdl3.SDL_GL_CreateContext(window)
-    if not gl_context:
+    try:
+        renderer.init_context(window)
+    except Exception:
         sdl3.SDL_DestroyWindow(window)
         sdl3.SDL_Quit()
-        raise RuntimeError(f"SDL_GL_CreateContext failed: {sdl3.SDL_GetError().decode()}")
+        raise
 
-    sdl3.SDL_GL_MakeCurrent(window, gl_context)
-    sdl3.SDL_GL_SetSwapInterval(1)
-
-    GL.glEnable(GL.GL_BLEND)
-    GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-
-    return window, gl_context
-
-
-def setup_ortho(width: int, height: int) -> None:
-    GL.glViewport(0, 0, width, height)
-    GL.glMatrixMode(GL.GL_PROJECTION)
-    GL.glLoadIdentity()
-    GL.glOrtho(0, width, height, 0, -1, 1)
-    GL.glMatrixMode(GL.GL_MODELVIEW)
-    GL.glLoadIdentity()
+    return window
 
 
 def handle_events(scale: float) -> tuple[bool, float]:
@@ -55,69 +45,52 @@ def handle_events(scale: float) -> tuple[bool, float]:
 
         if event.type == sdl3.SDL_EVENT_KEY_DOWN:
             scancode = event.key.scancode
-
             if scancode == sdl3.SDL_SCANCODE_ESCAPE:
                 return False, scale
-
-            if scancode == sdl3.SDL_SCANCODE_PERIOD:
-                if scale < 16.0:
-                    scale *= 2.0
-
-            elif scancode == sdl3.SDL_SCANCODE_COMMA:
-                if scale > 0.25:
-                    scale /= 2.0
+            if scancode == sdl3.SDL_SCANCODE_PERIOD and scale < 16.0:
+                scale *= 2.0
+            elif scancode == sdl3.SDL_SCANCODE_COMMA and scale > 0.25:
+                scale /= 2.0
 
     return True, scale
 
 
-def draw_solid_rect_border(x: float, y: float, width: float, height: float, thickness: float) -> None:
-    """Рисует рамку заданной толщины через 4 прямоугольника."""
-    GL.glBegin(GL.GL_QUADS)
-    # Верхняя грань
-    GL.glVertex2f(x, y)
-    GL.glVertex2f(x + width, y)
-    GL.glVertex2f(x + width, y + thickness)
-    GL.glVertex2f(x, y + thickness)
-    # Нижняя грань
-    GL.glVertex2f(x, y + height - thickness)
-    GL.glVertex2f(x + width, y + height - thickness)
-    GL.glVertex2f(x + width, y + height)
-    GL.glVertex2f(x, y + height)
-    # Левая грань
-    GL.glVertex2f(x, y + thickness)
-    GL.glVertex2f(x + thickness, y + thickness)
-    GL.glVertex2f(x + thickness, y + height - thickness)
-    GL.glVertex2f(x, y + height - thickness)
-    # Правая грань
-    GL.glVertex2f(x + width - thickness, y + thickness)
-    GL.glVertex2f(x + width, y + thickness)
-    GL.glVertex2f(x + width, y + height - thickness)
-    GL.glVertex2f(x + width - thickness, y + height - thickness)
-    GL.glEnd()
+def draw_solid_rect_border(
+    renderer: IRenderer,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    thickness: float,
+    color: tuple[float, float, float],
+) -> None:
+    """Рисует рамку через 4 прямоугольника, не зная о конкретном API."""
+    renderer.fill_rect(x, y, width, thickness, color)  # Верхняя грань
+    renderer.fill_rect(x, y + height - thickness, width, thickness, color)  # Нижняя грань
+    renderer.fill_rect(x, y + thickness, thickness, height - 2 * thickness, color)  # Левая грань
+    renderer.fill_rect(x + width - thickness, y + thickness, thickness, height - 2 * thickness, color)  # Правая
 
 
-def draw_double_frame(x: float, y: float, width: float, height: float, gap: float, thickness: float) -> None:
-    """Рисует двойную рамку."""
-    GL.glColor3f(*FRAME_COLOR)
-    draw_solid_rect_border(x, y, width, height, thickness)
+def draw_double_frame(
+    renderer: IRenderer, x: float, y: float, width: float, height: float, gap: float, thickness: float
+) -> None:
+    draw_solid_rect_border(renderer, x, y, width, height, thickness, FRAME_COLOR)
     inset = thickness + gap
-    draw_solid_rect_border(x + inset, y + inset, width - 2 * inset, height - 2 * inset, thickness)
+    draw_solid_rect_border(renderer, x + inset, y + inset, width - 2 * inset, height - 2 * inset, thickness, FRAME_COLOR)
 
 
 def render(
+    renderer: IRenderer,
     width: int,
     height: int,
-    tex_id: int,
+    text_texture: ITexture,
     start_x: float,
     start_y: float,
     text_w: int,
     text_h: int,
     scale: float,
 ) -> None:
-    setup_ortho(width, height)
-
-    GL.glClearColor(*BG_COLOR, 1.0)
-    GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+    renderer.begin_frame(width, height, BG_COLOR)
 
     thickness = max(1.0, 2.0 * scale)
     frame_gap = max(2.0, 4.0 * scale)
@@ -127,20 +100,16 @@ def render(
     frame_w = text_w + 2 * total_offset
     frame_h = text_h + 2 * total_offset
 
-    draw_double_frame(start_x, start_y, frame_w, frame_h, frame_gap, thickness)
-    draw_text_texture(tex_id, start_x + total_offset, start_y + total_offset, float(text_w), float(text_h))
-
-
-def cleanup(window, gl_context, tex_id: int) -> None:
-    delete_text_texture(tex_id)
-    sdl3.SDL_GL_DestroyContext(gl_context)
-    sdl3.SDL_DestroyWindow(window)
-    sdl3.SDL_Quit()
+    draw_double_frame(renderer, start_x, start_y, frame_w, frame_h, frame_gap, thickness)
+    text_texture.draw(start_x + total_offset, start_y + total_offset, float(text_w), float(text_h))
 
 
 def main() -> None:
+    # Единственное место выбора графического API ("opengl" или "vulkan")
+    renderer = load_backend("opengl")
+
     width, height = 900, 600
-    window, gl_context = init_window(b"TextFrame - OpenGL", width, height)
+    window = init_window(renderer, b"TextFrame", width, height)
 
     flags = sdl3.SDL_GetWindowFlags(window)
     if flags & sdl3.SDL_WINDOW_OPENGL:
@@ -155,7 +124,9 @@ def main() -> None:
     start_y = 80.0
     scale = 1.0
 
-    tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale), TEXT_COLOR_RGBA)
+    text_texture, text_w, text_h = create_text_texture(
+        renderer, text, int(base_font_size * scale), TEXT_COLOR_RGBA
+    )
 
     w_ptr = ctypes.c_int(width)
     h_ptr = ctypes.c_int(height)
@@ -166,15 +137,19 @@ def main() -> None:
 
         if new_scale != scale:
             scale = new_scale
-            delete_text_texture(tex_id)
-            tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale), TEXT_COLOR_RGBA)
+            text_texture.destroy()
+            text_texture, text_w, text_h = create_text_texture(
+                renderer, text, int(base_font_size * scale), TEXT_COLOR_RGBA
+            )
 
         sdl3.SDL_GetWindowSizeInPixels(window, ctypes.byref(w_ptr), ctypes.byref(h_ptr))
-        render(w_ptr.value, h_ptr.value, tex_id, start_x, start_y, text_w, text_h, scale)
+        render(renderer, w_ptr.value, h_ptr.value, text_texture, start_x, start_y, text_w, text_h, scale)
+        renderer.end_frame(window)
 
-        sdl3.SDL_GL_SwapWindow(window)
-
-    cleanup(window, gl_context, tex_id)
+    text_texture.destroy()
+    renderer.shutdown()
+    sdl3.SDL_DestroyWindow(window)
+    sdl3.SDL_Quit()
 
 
 if __name__ == "__main__":
