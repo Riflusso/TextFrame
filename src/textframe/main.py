@@ -106,7 +106,7 @@ def render(
 
 def main() -> None:
     # Единственное место выбора графического API ("opengl" или "vulkan")
-    renderer = load_backend("opengl")
+    renderer = load_backend("vulkan")
 
     width, height = 900, 600
     window = init_window(renderer, b"TextFrame", width, height)
