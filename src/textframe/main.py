@@ -13,6 +13,11 @@ BACKENDS = {
     "vulkan": create_vulkan_renderer,
 }
 
+WINDOW_TITLES = {
+    "opengl": b"TextFrame - OpenGL",
+    "vulkan": b"TextFrame - Vulkan",
+}
+
 
 def create_app_window(
     renderer: IRenderer,
@@ -25,8 +30,7 @@ def create_app_window(
     """Создает окно с нужными флагами рендерера и инициализирует графический контекст."""
     renderer.prepare_window_hints()
 
-    titles = {"opengl": b"TextFrame - OpenGL", "vulkan": b"TextFrame - Vulkan"}
-    title = titles.get(backend_name, b"TextFrame")
+    title = WINDOW_TITLES.get(backend_name, b"TextFrame")
     flags = renderer.get_window_flags() | sdl3.SDL_WINDOW_RESIZABLE
     window = sdl3.SDL_CreateWindow(title, width, height, flags)
     if not window:
@@ -52,6 +56,34 @@ def get_greeting_text(window) -> str:
     if flags & sdl3.SDL_WINDOW_VULKAN:
         return "Привет, Vulkan!"
     return "Привет!"
+
+
+def rebuild_text_texture(
+    renderer: IRenderer,
+    window,
+    base_font_size: int,
+    scale: float,
+    old_texture: ITexture | None = None,
+) -> tuple[ITexture, int, int]:
+    """Удаляет старую текстуру текста (если есть) и создает новую с актуальным API и масштабом."""
+    if old_texture is not None:
+        old_texture.destroy()
+    text = get_greeting_text(window)
+    return create_text_texture(renderer, text, int(base_font_size * scale), TEXT_COLOR_RGBA)
+
+
+def destroy_window_resources(
+    window,
+    renderer: IRenderer | None,
+    text_texture: ITexture | None = None,
+) -> None:
+    """Освобождает текстуру, графический контекст и окно SDL3."""
+    if text_texture is not None:
+        text_texture.destroy()
+    if renderer is not None:
+        renderer.shutdown()
+    if window is not None:
+        sdl3.SDL_DestroyWindow(window)
 
 
 def handle_events(scale: float, current_backend: str) -> tuple[bool, float, str]:
@@ -87,10 +119,11 @@ def draw_solid_rect_border(
     color: tuple[float, float, float],
 ) -> None:
     """Рисует рамку через 4 прямоугольника, не зная о конкретном API."""
+    inner_height = height - 2 * thickness
     renderer.fill_rect(x, y, width, thickness, color)  # Верхняя грань
     renderer.fill_rect(x, y + height - thickness, width, thickness, color)  # Нижняя грань
-    renderer.fill_rect(x, y + thickness, thickness, height - 2 * thickness, color)  # Левая грань
-    renderer.fill_rect(x + width - thickness, y + thickness, thickness, height - 2 * thickness, color)  # Правая
+    renderer.fill_rect(x, y + thickness, thickness, inner_height, color)  # Левая грань
+    renderer.fill_rect(x + width - thickness, y + thickness, thickness, inner_height, color)  # Правая грань
 
 
 def draw_double_frame(
@@ -131,21 +164,20 @@ def main() -> None:
         raise RuntimeError(f"SDL_Init failed: {sdl3.SDL_GetError().decode()}")
 
     width, height = 900, 600
-    current_backend = "opengl"
-    renderer = BACKENDS[current_backend]()
-    window = create_app_window(renderer, current_backend, width, height)
-
     base_font_size = 32
-    start_x = 80.0
-    start_y = 80.0
+    start_x, start_y = 80.0, 80.0
     scale = 1.0
 
-    text = get_greeting_text(window)
-    text_texture, text_w, text_h = create_text_texture(
-        renderer, text, int(base_font_size * scale), TEXT_COLOR_RGBA
-    )
+    current_backend = "opengl"
+    renderer: IRenderer | None = None
+    window = None
+    text_texture: ITexture | None = None
 
     try:
+        renderer = BACKENDS[current_backend]()
+        window = create_app_window(renderer, current_backend, width, height)
+        text_texture, text_w, text_h = rebuild_text_texture(renderer, window, base_font_size, scale)
+
         w_ptr = ctypes.c_int(width)
         h_ptr = ctypes.c_int(height)
 
@@ -153,16 +185,14 @@ def main() -> None:
         while running:
             running, new_scale, new_backend = handle_events(scale, current_backend)
 
-            # Горячее переключение графического API по нажатию Tab
             if new_backend != current_backend:
                 win_x, win_y = ctypes.c_int(), ctypes.c_int()
                 win_w, win_h = ctypes.c_int(), ctypes.c_int()
                 sdl3.SDL_GetWindowPosition(window, ctypes.byref(win_x), ctypes.byref(win_y))
                 sdl3.SDL_GetWindowSize(window, ctypes.byref(win_w), ctypes.byref(win_h))
 
-                text_texture.destroy()
-                renderer.shutdown()
-                sdl3.SDL_DestroyWindow(window)
+                destroy_window_resources(window, renderer, text_texture)
+                window, renderer, text_texture = None, None, None
 
                 current_backend = new_backend
                 scale = new_scale
@@ -170,27 +200,19 @@ def main() -> None:
                 window = create_app_window(
                     renderer, current_backend, win_w.value, win_h.value, win_x.value, win_y.value
                 )
+                text_texture, text_w, text_h = rebuild_text_texture(renderer, window, base_font_size, scale)
 
-                text = get_greeting_text(window)
-                text_texture, text_w, text_h = create_text_texture(
-                    renderer, text, int(base_font_size * scale), TEXT_COLOR_RGBA
-                )
-
-            # Обновление текстуры при изменении масштаба
             elif new_scale != scale:
                 scale = new_scale
-                text_texture.destroy()
-                text_texture, text_w, text_h = create_text_texture(
-                    renderer, text, int(base_font_size * scale), TEXT_COLOR_RGBA
+                text_texture, text_w, text_h = rebuild_text_texture(
+                    renderer, window, base_font_size, scale, text_texture
                 )
 
             sdl3.SDL_GetWindowSizeInPixels(window, ctypes.byref(w_ptr), ctypes.byref(h_ptr))
             render(renderer, w_ptr.value, h_ptr.value, text_texture, start_x, start_y, text_w, text_h, scale)
             renderer.end_frame(window)
     finally:
-        text_texture.destroy()
-        renderer.shutdown()
-        sdl3.SDL_DestroyWindow(window)
+        destroy_window_resources(window, renderer, text_texture)
         sdl3.SDL_Quit()
 
 
