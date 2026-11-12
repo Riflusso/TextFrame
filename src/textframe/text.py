@@ -1,39 +1,56 @@
+import numpy as np
 from OpenGL import GL
 from PIL import Image, ImageDraw, ImageFont
 
 
-def create_text_texture(text: str, font_size: int = 32) -> tuple[int, int, int]:
-    """Рендерит текст через системный шрифт в текстуру OpenGL. Возвращает (texture_id, width, height)."""
+def create_text_texture(
+    text: str,
+    font_size: int,
+    color: tuple[int, int, int, int] = (240, 245, 255, 255),
+) -> tuple[int, int, int]:
+    """Рендерит текст в текстуру OpenGL под конкретный font_size."""
+    safe_size = max(4, font_size)
     try:
-        # Берем стандартный шрифт Windows (поддерживает и русский, и английский)
-        font = ImageFont.truetype("arial.ttf", font_size)
+        font = ImageFont.truetype("arial.ttf", safe_size)
     except OSError:
         font = ImageFont.load_default()
 
-    # Узнаем точный размер текста в пикселях
-    bbox = font.getbbox(text)
-    width = bbox[2] - bbox[0] + 4
-    height = bbox[3] - bbox[1] + 4
+    left, top, right, bottom = font.getbbox(text)
+    width = max(1, right - left + 4)
+    height = max(1, bottom - top + 4)
 
-    # Рисуем белый текст на прозрачном фоне
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.text((-bbox[0] + 2, -bbox[1] + 2), text, font=font, fill=(240, 245, 255, 255))
+    draw.text((-left + 2, -top + 2), text, font=font, fill=color)
 
-    # Загружаем пиксели в OpenGL текстуру
+    pixels = np.array(image, dtype=np.uint8)
+
     tex_id = GL.glGenTextures(1)
     GL.glBindTexture(GL.GL_TEXTURE_2D, tex_id)
-    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST)
-    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
     GL.glTexImage2D(
-        GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, width, height, 0,
-        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, image.tobytes()
+        GL.GL_TEXTURE_2D,
+        0,
+        GL.GL_RGBA,
+        width,
+        height,
+        0,
+        GL.GL_RGBA,
+        GL.GL_UNSIGNED_BYTE,
+        pixels,
     )
     return tex_id, width, height
 
 
+def delete_text_texture(tex_id: int) -> None:
+    """Удаляет текстуру из видеопамяти."""
+    if tex_id:
+        GL.glDeleteTextures([tex_id])
+
+
 def draw_text_texture(tex_id: int, x: float, y: float, width: float, height: float) -> None:
-    """Выводит готовую текстуру текста в координатах (x, y) с заданным размером."""
+    """Выводит готовую текстуру текста в координатах (x, y) 1 к 1."""
     GL.glEnable(GL.GL_TEXTURE_2D)
     GL.glBindTexture(GL.GL_TEXTURE_2D, tex_id)
     GL.glColor3f(1.0, 1.0, 1.0)

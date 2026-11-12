@@ -3,7 +3,7 @@ import ctypes
 import sdl3
 from OpenGL import GL
 
-from .text import create_text_texture, draw_text_texture
+from .text import create_text_texture, delete_text_texture, draw_text_texture
 
 
 def init_window(title: bytes, width: int, height: int):
@@ -17,11 +17,19 @@ def init_window(title: bytes, width: int, height: int):
     window = sdl3.SDL_CreateWindow(
         title, width, height, sdl3.SDL_WINDOW_OPENGL | sdl3.SDL_WINDOW_RESIZABLE
     )
+    if not window:
+        sdl3.SDL_Quit()
+        raise RuntimeError(f"SDL_CreateWindow failed: {sdl3.SDL_GetError().decode()}")
+
     gl_context = sdl3.SDL_GL_CreateContext(window)
+    if not gl_context:
+        sdl3.SDL_DestroyWindow(window)
+        sdl3.SDL_Quit()
+        raise RuntimeError(f"SDL_GL_CreateContext failed: {sdl3.SDL_GetError().decode()}")
+
     sdl3.SDL_GL_MakeCurrent(window, gl_context)
     sdl3.SDL_GL_SetSwapInterval(1)
 
-    # Включаем прозрачность (альфа-канал) для текстуры текста
     GL.glEnable(GL.GL_BLEND)
     GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
 
@@ -37,28 +45,93 @@ def setup_ortho(width: int, height: int) -> None:
     GL.glLoadIdentity()
 
 
-def handle_events() -> bool:
+def handle_events(scale: float) -> tuple[bool, float]:
+    """Обработка клавиш: Esc — выход, > (.) — масштаб x2, < (,) — масштаб /2."""
     event = sdl3.SDL_Event()
     while sdl3.SDL_PollEvent(ctypes.byref(event)):
         if event.type == sdl3.SDL_EVENT_QUIT:
-            return False
+            return False, scale
+
         if event.type == sdl3.SDL_EVENT_KEY_DOWN:
-            if event.key.scancode == sdl3.SDL_SCANCODE_ESCAPE:
-                return False
-    return True
+            scancode = event.key.scancode
+
+            if scancode == sdl3.SDL_SCANCODE_ESCAPE:
+                return False, scale
+
+            if scancode == sdl3.SDL_SCANCODE_PERIOD:
+                if scale < 16.0:
+                    scale *= 2.0
+
+            elif scancode == sdl3.SDL_SCANCODE_COMMA:
+                if scale > 0.25:
+                    scale /= 2.0
+
+    return True, scale
 
 
-def render(width: int, height: int, tex_id: int, x: float, y: float, text_w: float, text_h: float) -> None:
+def draw_solid_rect_border(x: float, y: float, width: float, height: float, thickness: float) -> None:
+    """Рисует рамку заданной толщины через 4 прямоугольника."""
+    GL.glBegin(GL.GL_QUADS)
+    # Верхняя грань
+    GL.glVertex2f(x, y)
+    GL.glVertex2f(x + width, y)
+    GL.glVertex2f(x + width, y + thickness)
+    GL.glVertex2f(x, y + thickness)
+    # Нижняя грань
+    GL.glVertex2f(x, y + height - thickness)
+    GL.glVertex2f(x + width, y + height - thickness)
+    GL.glVertex2f(x + width, y + height)
+    GL.glVertex2f(x, y + height)
+    # Левая грань
+    GL.glVertex2f(x, y + thickness)
+    GL.glVertex2f(x + thickness, y + thickness)
+    GL.glVertex2f(x + thickness, y + height - thickness)
+    GL.glVertex2f(x, y + height - thickness)
+    # Правая грань
+    GL.glVertex2f(x + width - thickness, y + thickness)
+    GL.glVertex2f(x + width, y + thickness)
+    GL.glVertex2f(x + width, y + height - thickness)
+    GL.glVertex2f(x + width - thickness, y + height - thickness)
+    GL.glEnd()
+
+
+def draw_double_frame(x: float, y: float, width: float, height: float, gap: float, thickness: float) -> None:
+    """Рисует двойную рамку."""
+    GL.glColor3f(0.45, 0.75, 1.0)
+    draw_solid_rect_border(x, y, width, height, thickness)
+    inset = thickness + gap
+    draw_solid_rect_border(x + inset, y + inset, width - 2 * inset, height - 2 * inset, thickness)
+
+
+def render(
+    width: int,
+    height: int,
+    tex_id: int,
+    start_x: float,
+    start_y: float,
+    text_w: int,
+    text_h: int,
+    scale: float,
+) -> None:
     setup_ortho(width, height)
 
     GL.glClearColor(0.12, 0.13, 0.16, 1.0)
     GL.glClear(GL.GL_COLOR_BUFFER_BIT)
 
-    draw_text_texture(tex_id, x, y, text_w, text_h)
+    thickness = max(1.0, 2.0 * scale)
+    frame_gap = max(2.0, 4.0 * scale)
+    inner_pad = max(4.0, 10.0 * scale)
+
+    total_offset = 2 * thickness + frame_gap + inner_pad
+    frame_w = text_w + 2 * total_offset
+    frame_h = text_h + 2 * total_offset
+
+    draw_double_frame(start_x, start_y, frame_w, frame_h, frame_gap, thickness)
+    draw_text_texture(tex_id, start_x + total_offset, start_y + total_offset, float(text_w), float(text_h))
 
 
 def cleanup(window, gl_context, tex_id: int) -> None:
-    GL.glDeleteTextures([tex_id])
+    delete_text_texture(tex_id)
     sdl3.SDL_GL_DestroyContext(gl_context)
     sdl3.SDL_DestroyWindow(window)
     sdl3.SDL_Quit()
@@ -76,21 +149,27 @@ def main() -> None:
     else:
         text = "Привет!"
 
-    tex_id, base_w, base_h = create_text_texture(text, font_size=32)
-
-    start_x = 100.0
-    start_y = 120.0
+    base_font_size = 32
+    start_x = 80.0
+    start_y = 80.0
     scale = 1.0
+
+    tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale))
 
     w_ptr = ctypes.c_int(width)
     h_ptr = ctypes.c_int(height)
 
     running = True
     while running:
-        running = handle_events()
+        running, new_scale = handle_events(scale)
+
+        if new_scale != scale:
+            scale = new_scale
+            delete_text_texture(tex_id)
+            tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale))
 
         sdl3.SDL_GetWindowSizeInPixels(window, ctypes.byref(w_ptr), ctypes.byref(h_ptr))
-        render(w_ptr.value, h_ptr.value, tex_id, start_x, start_y, base_w * scale, base_h * scale)
+        render(w_ptr.value, h_ptr.value, tex_id, start_x, start_y, text_w, text_h, scale)
 
         sdl3.SDL_GL_SwapWindow(window)
 
