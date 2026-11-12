@@ -131,7 +131,7 @@ def main() -> None:
         raise RuntimeError(f"SDL_Init failed: {sdl3.SDL_GetError().decode()}")
 
     width, height = 900, 600
-    current_backend = "vulkan"
+    current_backend = "opengl"
     renderer = BACKENDS[current_backend]()
     window = create_app_window(renderer, current_backend, width, height)
 
