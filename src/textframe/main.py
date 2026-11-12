@@ -52,10 +52,10 @@ def get_greeting_text(window) -> str:
     """Возвращает текст в зависимости от активного флага окна."""
     flags = sdl3.SDL_GetWindowFlags(window)
     if flags & sdl3.SDL_WINDOW_OPENGL:
-        return "Привет, OpenGL!"
+        return "Hello, OpenGL!"
     if flags & sdl3.SDL_WINDOW_VULKAN:
-        return "Привет, Vulkan!"
-    return "Привет!"
+        return "Hello, Vulkan!"
+    return "Hello!"
 
 
 def rebuild_text_texture(
