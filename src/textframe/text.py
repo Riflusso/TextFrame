@@ -2,11 +2,13 @@ import numpy as np
 from OpenGL import GL
 from PIL import Image, ImageDraw, ImageFont
 
+from .styles import TEXT_COLOR_RGBA
+
 
 def create_text_texture(
     text: str,
     font_size: int,
-    color: tuple[int, int, int, int] = (240, 245, 255, 255),
+    color: tuple[int, int, int, int] = TEXT_COLOR_RGBA,
 ) -> tuple[int, int, int]:
     """Рендерит текст в текстуру OpenGL под конкретный font_size."""
     safe_size = max(4, font_size)

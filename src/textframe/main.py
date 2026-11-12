@@ -3,6 +3,7 @@ import ctypes
 import sdl3
 from OpenGL import GL
 
+from .styles import BG_COLOR, FRAME_COLOR, TEXT_COLOR_RGBA
 from .text import create_text_texture, delete_text_texture, draw_text_texture
 
 
@@ -97,7 +98,7 @@ def draw_solid_rect_border(x: float, y: float, width: float, height: float, thic
 
 def draw_double_frame(x: float, y: float, width: float, height: float, gap: float, thickness: float) -> None:
     """Рисует двойную рамку."""
-    GL.glColor3f(0.45, 0.75, 1.0)
+    GL.glColor3f(*FRAME_COLOR)
     draw_solid_rect_border(x, y, width, height, thickness)
     inset = thickness + gap
     draw_solid_rect_border(x + inset, y + inset, width - 2 * inset, height - 2 * inset, thickness)
@@ -115,7 +116,7 @@ def render(
 ) -> None:
     setup_ortho(width, height)
 
-    GL.glClearColor(0.12, 0.13, 0.16, 1.0)
+    GL.glClearColor(*BG_COLOR, 1.0)
     GL.glClear(GL.GL_COLOR_BUFFER_BIT)
 
     thickness = max(1.0, 2.0 * scale)
@@ -154,7 +155,7 @@ def main() -> None:
     start_y = 80.0
     scale = 1.0
 
-    tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale))
+    tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale), TEXT_COLOR_RGBA)
 
     w_ptr = ctypes.c_int(width)
     h_ptr = ctypes.c_int(height)
@@ -166,7 +167,7 @@ def main() -> None:
         if new_scale != scale:
             scale = new_scale
             delete_text_texture(tex_id)
-            tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale))
+            tex_id, text_w, text_h = create_text_texture(text, int(base_font_size * scale), TEXT_COLOR_RGBA)
 
         sdl3.SDL_GetWindowSizeInPixels(window, ctypes.byref(w_ptr), ctypes.byref(h_ptr))
         render(w_ptr.value, h_ptr.value, tex_id, start_x, start_y, text_w, text_h, scale)
